@@ -145,6 +145,7 @@ default to UDP. Blank lines, comments, and a header row are ignored.
 | `--udp-strict` | Require UDP responses for UDP readiness | Disabled |
 | `--cert-warning-days` | Certificate warning threshold | `30` |
 | `--no-archive` | Disable the timestamped JSON archive | Disabled |
+| `--iplookup {yes,no}` | Look up this machine's public IP via a third-party service | Prompts if interactive, else skips |
 | `--targets-url` | Fetch the target list from this URL instead of relying solely on `--file` | Disabled |
 | `--targets-cache-hours` | Reuse the cached target list this many hours before re-fetching | `24` |
 

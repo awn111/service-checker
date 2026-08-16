@@ -36,7 +36,7 @@ from urllib.parse import urlparse
 from urllib.request import urlopen
 from urllib.error import URLError
 
-VERSION = "1.2.4"
+VERSION = "1.2.5"
 DEFAULT_FILE = "hosts_r1.csv"
 DEFAULT_TIMEOUT = 5.0
 DEFAULT_WORKERS = 1  # serial by default -- one connection at a time, not a burst
@@ -58,7 +58,7 @@ CONFIG_DEFAULTS = {
     "udp_strict": False,
     "cert_warning_days": DEFAULT_CERT_WARNING_DAYS,
     "no_archive": False,
-    "skip_public_ip": False,
+    "iplookup": None,  # None = prompt if interactive, else skip
     "targets_url": None,
     "targets_cache_hours": DEFAULT_TARGETS_CACHE_HOURS,
 }
@@ -314,6 +314,28 @@ def is_header_row(fields):
     """
     normalized = [f.strip().lower() for f in fields]
     return bool(normalized and normalized[0] in {"host", "hostname", "fqdn", "url"})
+
+
+def resolve_iplookup(value):
+    """Decide whether to look up this machine's public IP.
+
+    Used by main. An explicit --iplookup/config value always wins, no
+    prompt either way. With nothing explicit: prompts interactively
+    when a terminal is attached (default answer on Enter/EOF: no);
+    otherwise -- e.g. under Task Scheduler or cron, where there is no
+    one to answer -- skips without prompting rather than hanging.
+    """
+    if value in ("yes", "no"):
+        return value == "yes"
+
+    if not sys.stdin.isatty():
+        return False
+
+    try:
+        answer = input("Look up this machine's public IP for the JSON metadata? [y/N]: ")
+    except EOFError:
+        return False
+    return answer.strip().lower() in ("y", "yes")
 
 
 def cache_is_fresh(path, max_age_hours):
@@ -1169,7 +1191,7 @@ def parse_args():
     parser.add_argument("--udp-strict", action="store_true", default=config["udp_strict"], help="Require UDP response for UDP services to pass readiness")
     parser.add_argument("--cert-warning-days", type=int, default=config["cert_warning_days"], help="Warn when certificate has this many days or fewer remaining")
     parser.add_argument("--no-archive", action="store_true", default=config["no_archive"], help="Do not create timestamped JSON archive copy")
-    parser.add_argument("--skip-public-ip", action="store_true", default=config["skip_public_ip"], help="Skip external lookup of the outside NAT IP (hostname/local IP are still recorded)")
+    parser.add_argument("--iplookup", choices=["yes", "no"], default=config["iplookup"], help="Look up this machine's public IP via a third-party service, for the JSON metadata (hostname/local IP are always recorded either way). If not set: prompts when a terminal is attached, otherwise skips (e.g. under Task Scheduler/cron)")
     parser.add_argument("--targets-url", default=config["targets_url"], help="Fetch the target list from this URL instead of relying solely on --file; the result is cached to --file, so --file becomes the cache path when this is set")
     parser.add_argument("--targets-cache-hours", type=float, default=config["targets_cache_hours"], help=f"Reuse the cached target list for this many hours before re-fetching (default: {DEFAULT_TARGETS_CACHE_HOURS})")
     return parser.parse_args()
@@ -1183,6 +1205,7 @@ def main():
     appends long-term history rows.
     """
     args = parse_args()
+    args.skip_public_ip = not resolve_iplookup(args.iplookup)
     started_at = utc_now_iso()
     input_path = Path(args.file)
 
