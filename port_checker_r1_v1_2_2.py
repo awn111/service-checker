@@ -36,10 +36,10 @@ from urllib.parse import urlparse
 from urllib.request import urlopen
 from urllib.error import URLError
 
-VERSION = "1.2.3"
+VERSION = "1.2.4"
 DEFAULT_FILE = "hosts_r1.csv"
 DEFAULT_TIMEOUT = 5.0
-DEFAULT_WORKERS = 20
+DEFAULT_WORKERS = 1  # serial by default -- one connection at a time, not a burst
 DEFAULT_CERT_WARNING_DAYS = 30
 DEFAULT_CONFIG_FILE = "port_checker_r1_config.json"
 DEFAULT_TARGETS_CACHE_HOURS = 24.0
@@ -1164,7 +1164,7 @@ def parse_args():
     parser.add_argument("-j", "--output-json", default=config["output_json"], help="Output JSON file")
     parser.add_argument("--history-file", default=config["history_file"], help="Append compact per-run zone summaries to this CSV file for long-term graphing")
     parser.add_argument("--timeout", type=float, default=config["timeout"], help="Socket timeout in seconds")
-    parser.add_argument("--workers", type=int, default=config["workers"], help="Concurrent worker threads")
+    parser.add_argument("--workers", type=int, default=config["workers"], help=f"Concurrent worker threads (default: {DEFAULT_WORKERS}, i.e. serial -- raise this for faster, burstier checks)")
     parser.add_argument("--tls-all", action="store_true", default=config["tls_all"], help="Attempt TLS/cert checks for all TCP ports, not only 443")
     parser.add_argument("--udp-strict", action="store_true", default=config["udp_strict"], help="Require UDP response for UDP services to pass readiness")
     parser.add_argument("--cert-warning-days", type=int, default=config["cert_warning_days"], help="Warn when certificate has this many days or fewer remaining")

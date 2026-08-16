@@ -4,9 +4,8 @@ Python tools for checking Ruckus One service readiness across the GLOBAL, US,
 EU, and APAC zones.
 
 The checker reads a host and port list, performs DNS, TCP, UDP, TLS, and
-certificate checks, and reports service and regional readiness. The command
-line checker uses only the Python standard library. Optional GUI front ends are
-also included.
+certificate checks, and reports service and regional readiness. Uses only
+the Python standard library -- nothing to install.
 
 ## Features
 
@@ -15,7 +14,7 @@ also included.
 - Optional UDP response checks
 - TLS handshake and certificate validity checks for TCP/443
 - Regional readiness summaries for GLOBAL, US, EU, and APAC
-- Concurrent checks using worker threads
+- Configurable concurrency, serial by default (`--workers`)
 - CSV and JSON result files
 - Timestamped JSON archives
 - Optional append-only history CSV for reporting and graphing
@@ -25,10 +24,6 @@ also included.
 - Python 3.9 or newer
 - Network access to the services being tested
 
-The CLI tools use Python built-in libraries only. The Qt GUI additionally
-requires PySide6. The Tkinter GUI requires a Python installation with Tkinter
-available.
-
 ## Quick Start
 
 Run the current R1 checker with the included host list:
@@ -36,6 +31,10 @@ Run the current R1 checker with the included host list:
 ```powershell
 python port_checker_r1_v1_2_2.py
 ```
+
+With the default worker count (serial, one connection at a time) a run
+against the included 20-target list takes about 9 seconds; pass a higher
+`--workers` for faster, more concurrent checks.
 
 Use a different input file and keep a long-term readiness history:
 
@@ -134,8 +133,6 @@ default to UDP. Blank lines, comments, and a header row are ignored.
 
 ## Command-Line Options
 
-The recommended script is `port_checker_r1_v1_2_2.py`.
-
 | Option | Description | Default |
 | --- | --- | --- |
 | `-f`, `--file` | Input hosts CSV/text file | `hosts_r1.csv` |
@@ -143,7 +140,7 @@ The recommended script is `port_checker_r1_v1_2_2.py`.
 | `-j`, `--output-json` | JSON result path | `r1_port_check_results.json` |
 | `--history-file` | Append zone summaries to a history CSV | Disabled |
 | `--timeout` | Socket timeout in seconds | `5` |
-| `--workers` | Number of concurrent worker threads | `20` |
+| `--workers` | Number of concurrent worker threads | `1` (serial) |
 | `--tls-all` | Attempt TLS and certificate checks on every TCP port | Disabled |
 | `--udp-strict` | Require UDP responses for UDP readiness | Disabled |
 | `--cert-warning-days` | Certificate warning threshold | `30` |
@@ -175,43 +172,6 @@ or another reporting tool:
 ```powershell
 python port_checker_r1_v1_2_2.py --history-file r1_history.csv
 ```
-
-## GUI Front Ends
-
-The repository includes two GUI prototypes:
-
-### Qt GUI
-
-Install PySide6 and launch the Qt interface:
-
-```powershell
-python -m pip install PySide6
-python port_checker_gui.py
-```
-
-### Tkinter GUI
-
-Launch the Tkinter interface when Tkinter is available:
-
-```powershell
-python port_checker_Tk-gui.py
-```
-
-The command-line checker is the recommended path for production checks. The
-GUI files are prototypes and may contain demonstration data or incomplete
-integration with the current CLI implementation.
-
-## Versioned Scripts
-
-- `port_checker_r1_v1_2_2.py`: latest R1 checker with history logging
-- `port_checker_r1_v1_2_1.py`: R1 checker with response timing summaries
-- `port_checker_r1_v1_2.py`: earlier R1 checker with regional readiness
-- `port_checker_r1.py`: first R1 regional checker
-- `port_checker.py`: general-purpose checker without R1 zone summaries
-
-The versioned files are retained for comparison and field-testing history.
-Use `port_checker_r1_v1_2_2.py` for new checks unless a previous version is
-needed for compatibility.
 
 ## Exit Codes
 
