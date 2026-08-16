@@ -1,0 +1,16 @@
+{
+    "org": "Acme Corp",
+    "file": "hosts_r1.csv",
+    "output_csv": "r1_port_check_results.csv",
+    "output_json": "r1_port_check_results.json",
+    "history_file": null,
+    "timeout": 5.0,
+    "workers": 20,
+    "tls_all": false,
+    "udp_strict": false,
+    "cert_warning_days": 30,
+    "no_archive": false,
+    "skip_public_ip": false,
+    "targets_url": null,
+    "targets_cache_hours": 24.0
+}

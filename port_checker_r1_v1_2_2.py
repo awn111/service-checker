@@ -1,17 +1,22 @@
 #!/usr/bin/env python3
 """
-port_checker_r1.py
-Version: 1.2.2
-
 Ruckus One readiness and regional response checker using Python built-in libraries only.
+
+Run with --version to print the current tool version (see the VERSION constant
+below, the single source of truth) rather than relying on this docstring, which
+is not updated per release.
 
 Adds optional append-only history logging for long-term graphing:
     --history-file r1_history.csv
 
-Normal use:
-    python3 port_checker_r1.py
-    python3 port_checker_r1.py --history-file r1_history.csv
-    python3 port_checker_r1.py -f customer_hosts.csv --history-file customer_history.csv
+Can fetch its target list from an ingest service instead of a local
+file, caching the result and falling back to the cache on failure:
+    --targets-url https://your-service.up.railway.app/targets
+
+Normal use (replace SCRIPT with this file's actual name):
+    python3 SCRIPT
+    python3 SCRIPT --history-file r1_history.csv
+    python3 SCRIPT -f customer_hosts.csv --history-file customer_history.csv
 
 The -i option is intentionally unused and reserved for future interface selection.
 """
@@ -28,12 +33,35 @@ from datetime import datetime, timezone
 from pathlib import Path
 from statistics import mean, median
 from urllib.parse import urlparse
+from urllib.request import urlopen
+from urllib.error import URLError
 
-VERSION = "1.2.2"
+VERSION = "1.2.3"
 DEFAULT_FILE = "hosts_r1.csv"
 DEFAULT_TIMEOUT = 5.0
 DEFAULT_WORKERS = 20
 DEFAULT_CERT_WARNING_DAYS = 30
+DEFAULT_CONFIG_FILE = "port_checker_r1_config.json"
+DEFAULT_TARGETS_CACHE_HOURS = 24.0
+
+# Built-in fallback for every config-file/CLI-overridable option. No passwords or
+# secrets belong in the config file, only these plain operational settings.
+CONFIG_DEFAULTS = {
+    "org": None,
+    "file": DEFAULT_FILE,
+    "output_csv": "r1_port_check_results.csv",
+    "output_json": "r1_port_check_results.json",
+    "history_file": None,
+    "timeout": DEFAULT_TIMEOUT,
+    "workers": DEFAULT_WORKERS,
+    "tls_all": False,
+    "udp_strict": False,
+    "cert_warning_days": DEFAULT_CERT_WARNING_DAYS,
+    "no_archive": False,
+    "skip_public_ip": False,
+    "targets_url": None,
+    "targets_cache_hours": DEFAULT_TARGETS_CACHE_HOURS,
+}
 CERT_DATE_FORMAT = "%b %d %H:%M:%S %Y %Z"
 UDP_DEFAULT_PORTS = {1812, 1813}
 KNOWN_ZONES = {"GLOBAL", "US", "EU", "APAC", "ASIA"}
@@ -74,6 +102,58 @@ STATUS_PRIORITY = {
     "UNSUPPORTED_PROTOCOL": 900,
     "OK": 999,
 }
+
+
+def get_local_ip():
+    """Determine this machine's local network IP address.
+
+    Opens a throwaway UDP socket to a public address (no packets are actually
+    sent) so the OS reports the outbound interface IP. Used to tag JSON output
+    with the source location since this script can run from many hosts.
+    """
+    try:
+        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sock:
+            sock.settimeout(1)
+            sock.connect(("8.8.8.8", 80))
+            return sock.getsockname()[0]
+    except OSError:
+        return ""
+
+
+def get_public_ip(timeout=3.0):
+    """Look up the outside NAT IP address via an external HTTP service.
+
+    Tries a small list of plain-text IP echo services and returns the first
+    successful response. Used to tag JSON output with the public-facing IP so
+    results collected from different sites/NATs can be told apart.
+    """
+    services = (
+        "https://api.ipify.org",
+        "https://checkip.amazonaws.com",
+        "https://ifconfig.me/ip",
+    )
+    for url in services:
+        try:
+            with urlopen(url, timeout=timeout) as response:
+                ip = response.read().decode().strip()
+                if ip:
+                    return ip
+        except (URLError, OSError, ValueError):
+            continue
+    return ""
+
+
+def get_source_info(skip_public_ip=False):
+    """Collect hostname, local IP, and public IP describing where this run executed.
+
+    Used to populate JSON metadata so results from different locations/NATs are
+    distinguishable when consolidating output later.
+    """
+    return {
+        "hostname": socket.gethostname(),
+        "local_ip": get_local_ip(),
+        "public_ip": "" if skip_public_ip else get_public_ip(),
+    }
 
 
 def utc_now_iso():
@@ -234,6 +314,67 @@ def is_header_row(fields):
     """
     normalized = [f.strip().lower() for f in fields]
     return bool(normalized and normalized[0] in {"host", "hostname", "fqdn", "url"})
+
+
+def cache_is_fresh(path, max_age_hours):
+    """Return True if path exists and was modified within max_age_hours.
+
+    Used by resolve_targets_file to decide whether a re-fetch is needed.
+    """
+    path = Path(path)
+    if not path.exists():
+        return False
+    age_seconds = time.time() - path.stat().st_mtime
+    return age_seconds < max_age_hours * 3600
+
+
+def fetch_targets_text(url, timeout=10.0):
+    """Download the target list from an ingest service as raw text.
+
+    Used by resolve_targets_file. Raises URLError/OSError on failure so
+    the caller can decide whether to fall back to a cached copy.
+    """
+    with urlopen(url, timeout=timeout) as response:
+        return response.read().decode("utf-8")
+
+
+def resolve_targets_file(path, targets_url, cache_hours):
+    """Ensure the hosts file at path is present and reasonably fresh.
+
+    Used by main before parsing the hosts file. A no-op (always returns
+    True) when targets_url is not set, so the script behaves exactly as
+    it did before target-list fetching existed. Otherwise: a fresh
+    cache is reused as-is; a missing or stale cache triggers a fetch;
+    a failed fetch falls back to a stale cache with a warning, and only
+    fails outright when there is no cache to fall back on.
+    """
+    if not targets_url:
+        return True
+
+    path = Path(path)
+    if cache_is_fresh(path, cache_hours):
+        return True
+
+    try:
+        text = fetch_targets_text(targets_url)
+    except (URLError, OSError) as exc:
+        if path.exists():
+            print(
+                f"WARNING: could not refresh target list from {targets_url} "
+                f"({exc}); using cached copy from {path}",
+                file=sys.stderr,
+            )
+            return True
+        print(
+            f"ERROR: could not fetch target list from {targets_url} and no "
+            f"cached copy exists at {path}: {exc}",
+            file=sys.stderr,
+        )
+        return False
+
+    path.write_text(text, encoding="utf-8")
+    print(f"Fetched target list from {targets_url} -> {path}")
+    return True
 
 
 def parse_hosts_file(path):
@@ -883,6 +1024,7 @@ def build_json_payload(results, readiness, args, started_at, finished_at):
     """
     return {
         "metadata": {
+            "my_org": args.org or "",
             "tool": "port_checker_r1.py",
             "version": VERSION,
             "started_at_utc": started_at,
@@ -895,7 +1037,9 @@ def build_json_payload(results, readiness, args, started_at, finished_at):
             "udp_strict": args.udp_strict,
             "cert_warning_days": args.cert_warning_days,
             "history_file": args.history_file or "",
+            "config_file": args.config,
             "status_summary": summarize_status(results),
+            "source": get_source_info(args.skip_public_ip),
         },
         "readiness": json_ready_readiness(readiness),
         "results": results,
@@ -973,23 +1117,61 @@ def append_history_file(path, readiness, run_timestamp, args):
     return path
 
 
+def load_config_file(path):
+    """Load standing default option values from a JSON config file.
+
+    Used by parse_args so a site/org can set defaults (like my_org) without
+    repeating CLI switches every run. Holds no passwords/secrets, only the same
+    plain settings exposed as CLI switches. A missing file yields no overrides;
+    an unreadable or malformed file is skipped with a warning rather than
+    failing the run. Unknown keys are ignored.
+    """
+    path = Path(path)
+    if not path.exists():
+        return {}
+    try:
+        with path.open("r", encoding="utf-8") as handle:
+            data = json.load(handle)
+    except (OSError, ValueError) as exc:
+        print(f"WARNING: Could not read config file {path}: {exc}", file=sys.stderr)
+        return {}
+    if not isinstance(data, dict):
+        print(f"WARNING: Config file {path} must contain a JSON object, ignoring", file=sys.stderr)
+        return {}
+    return {key: value for key, value in data.items() if key in CONFIG_DEFAULTS}
+
+
 def parse_args():
     """Parse command-line arguments.
 
     Used by main to configure input files, output files, timeouts, threading, TLS
-    behaviour, UDP strictness, archiving, and optional history logging.
+    behaviour, UDP strictness, archiving, and optional history logging. Defaults
+    come from (lowest to highest precedence) built-in constants, the JSON config
+    file, then explicit CLI switches.
     """
-    parser = argparse.ArgumentParser(description="Ruckus One multi-zone readiness and response checker.")
-    parser.add_argument("-f", "--file", default=DEFAULT_FILE, help=f"Input hosts CSV/text file (default: {DEFAULT_FILE})")
-    parser.add_argument("-o", "--output-csv", default="r1_port_check_results.csv", help="Output CSV file")
-    parser.add_argument("-j", "--output-json", default="r1_port_check_results.json", help="Output JSON file")
-    parser.add_argument("--history-file", default=None, help="Append compact per-run zone summaries to this CSV file for long-term graphing")
-    parser.add_argument("--timeout", type=float, default=DEFAULT_TIMEOUT, help="Socket timeout in seconds")
-    parser.add_argument("--workers", type=int, default=DEFAULT_WORKERS, help="Concurrent worker threads")
-    parser.add_argument("--tls-all", action="store_true", help="Attempt TLS/cert checks for all TCP ports, not only 443")
-    parser.add_argument("--udp-strict", action="store_true", help="Require UDP response for UDP services to pass readiness")
-    parser.add_argument("--cert-warning-days", type=int, default=DEFAULT_CERT_WARNING_DAYS, help="Warn when certificate has this many days or fewer remaining")
-    parser.add_argument("--no-archive", action="store_true", help="Do not create timestamped JSON archive copy")
+    config_pre_parser = argparse.ArgumentParser(add_help=False)
+    config_pre_parser.add_argument("--config", default=DEFAULT_CONFIG_FILE)
+    config_args, _ = config_pre_parser.parse_known_args()
+    config = dict(CONFIG_DEFAULTS)
+    config.update(load_config_file(config_args.config))
+
+    parser = argparse.ArgumentParser(description=f"Ruckus One multi-zone readiness and response checker (v{VERSION}).")
+    parser.add_argument("--config", default=config_args.config, help=f"JSON config file providing default option values (default: {DEFAULT_CONFIG_FILE}); CLI switches always override it")
+    parser.add_argument("--version", action="version", version=f"%(prog)s {VERSION}")
+    parser.add_argument("--org", default=config["org"], help="Organization name tag (my_org) recorded in JSON metadata for filtering multi-org results")
+    parser.add_argument("-f", "--file", default=config["file"], help=f"Input hosts CSV/text file (default: {DEFAULT_FILE})")
+    parser.add_argument("-o", "--output-csv", default=config["output_csv"], help="Output CSV file")
+    parser.add_argument("-j", "--output-json", default=config["output_json"], help="Output JSON file")
+    parser.add_argument("--history-file", default=config["history_file"], help="Append compact per-run zone summaries to this CSV file for long-term graphing")
+    parser.add_argument("--timeout", type=float, default=config["timeout"], help="Socket timeout in seconds")
+    parser.add_argument("--workers", type=int, default=config["workers"], help="Concurrent worker threads")
+    parser.add_argument("--tls-all", action="store_true", default=config["tls_all"], help="Attempt TLS/cert checks for all TCP ports, not only 443")
+    parser.add_argument("--udp-strict", action="store_true", default=config["udp_strict"], help="Require UDP response for UDP services to pass readiness")
+    parser.add_argument("--cert-warning-days", type=int, default=config["cert_warning_days"], help="Warn when certificate has this many days or fewer remaining")
+    parser.add_argument("--no-archive", action="store_true", default=config["no_archive"], help="Do not create timestamped JSON archive copy")
+    parser.add_argument("--skip-public-ip", action="store_true", default=config["skip_public_ip"], help="Skip external lookup of the outside NAT IP (hostname/local IP are still recorded)")
+    parser.add_argument("--targets-url", default=config["targets_url"], help="Fetch the target list from this URL instead of relying solely on --file; the result is cached to --file, so --file becomes the cache path when this is set")
+    parser.add_argument("--targets-cache-hours", type=float, default=config["targets_cache_hours"], help=f"Reuse the cached target list for this many hours before re-fetching (default: {DEFAULT_TARGETS_CACHE_HOURS})")
     return parser.parse_args()
 
 
@@ -1003,6 +1185,10 @@ def main():
     args = parse_args()
     started_at = utc_now_iso()
     input_path = Path(args.file)
+
+    if not resolve_targets_file(input_path, args.targets_url, args.targets_cache_hours):
+        return 1
+
     if not input_path.exists():
         print(f"ERROR: Input file not found: {args.file}", file=sys.stderr)
         return 1

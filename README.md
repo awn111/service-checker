@@ -45,6 +45,19 @@ python port_checker_r1_v1_2_2.py `
   --history-file r1_history.csv
 ```
 
+## Config File
+
+Instead of repeating CLI switches every run, copy
+`port_checker_r1_config.example.json` to `port_checker_r1_config.json` (default
+name, looked up in the current directory) and set standing defaults there,
+including `org` (recorded as `my_org` in JSON metadata for filtering
+multi-org results). Use `--config path.json` to point at a different file.
+
+Precedence, lowest to highest: built-in defaults -> config file -> explicit CLI
+switches. Any CLI switch you pass always overrides the config file. The config
+file holds no passwords or secrets, only the same plain settings exposed as
+CLI options.
+
 The default run creates:
 
 - `r1_port_check_results.csv`: one row per checked service
@@ -53,6 +66,27 @@ The default run creates:
 
 Generated result files are not required inputs for a later run and can be
 deleted or redirected with the output options.
+
+## Fetching the target list remotely
+
+By default the checker reads targets from a local file (`--file`,
+default `hosts_r1.csv`). Set `--targets-url` (or `targets_url` in the
+config file) to fetch that file from an ingest service instead, e.g.:
+
+```powershell
+python port_checker_r1_v1_2_2.py --targets-url https://your-service.up.railway.app/targets
+```
+
+When `--targets-url` is set, `--file` becomes the local cache path: a
+fetch writes the response there, and later runs reuse that cache for
+`--targets-cache-hours` (default 24) before fetching again. If a fetch
+fails -- no network, the service is down -- the checker falls back to
+the existing cache with a warning rather than failing the run; it only
+fails outright if there is no cache yet to fall back on. This is the
+recommended way to point the checker at a centrally-maintained target
+list without redistributing this script every time the list changes:
+put `targets_url` in your own `port_checker_r1_config.json` (git-ignored,
+site-specific) rather than passing it on the command line every time.
 
 ## Host File Format
 
@@ -114,6 +148,8 @@ The recommended script is `port_checker_r1_v1_2_2.py`.
 | `--udp-strict` | Require UDP responses for UDP readiness | Disabled |
 | `--cert-warning-days` | Certificate warning threshold | `30` |
 | `--no-archive` | Disable the timestamped JSON archive | Disabled |
+| `--targets-url` | Fetch the target list from this URL instead of relying solely on `--file` | Disabled |
+| `--targets-cache-hours` | Reuse the cached target list this many hours before re-fetching | `24` |
 
 Examples:
 

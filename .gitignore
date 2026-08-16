@@ -1,0 +1,13 @@
+__pycache__/
+*.pyc
+
+# Generated per-run output (default filenames from CONFIG_DEFAULTS)
+r1_port_check_results.csv
+r1_port_check_results.json
+json_archive/
+archive/
+*_history.csv
+
+# Site-specific config: may contain an org name, never commit a real one
+port_checker_r1_config*.json
+!port_checker_r1_config.example.json
